@@ -19,15 +19,22 @@ STATUSES = ["待采集", "数据正常", "振动超标", "已复测"]
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按监测编号检索"),
+    part: str | None = Query(default=None, description="按监测部位检索"),
+    turbine: str | None = Query(default=None, description="按所属机组检索"),
     status: str | None = Query(default=None, description="待采集、数据正常、振动超标、已复测"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按监测编号与状态过滤振动监测列表；没有数据时返回空页，不报错。"""
+    """按监测编号、部位、机组与状态过滤振动监测列表；没有数据时返回空页，不报错。
+
+    列表里每条记录的监测状态与卡片统计都由服务层同一份判断给出，页面不再自行判读。
+    """
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
-    return PageResult(items=items, total=total, page=page, size=size)
+    items, total = service.list_entries(
+        keyword=keyword, part=part, turbine=turbine, status=status, page=page, size=size
+    )
+    return PageResult(items=items, total=total, page=page, size=size, stats=service.stats())
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -60,6 +67,6 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
 
 @router.get("/export")
 def export_entries() -> dict[str, Any]:
-    """导出振动监测清单：返回当前过滤条件下的全量数据。"""
+    """导出振动监测清单：返回当前过滤条件下的全量数据，状态口径与列表保持一致。"""
     items, total = service.list_entries(page=1, size=10000)
-    return {"module": "vibration", "total": total, "items": items}
+    return {"module": "vibration", "total": total, "items": items, "stats": service.stats()}

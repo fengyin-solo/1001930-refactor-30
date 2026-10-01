@@ -13,6 +13,8 @@ class PageResult(BaseModel, Generic[T]):
     total: int
     page: int = 1
     size: int = 20
+    # 统计卡片：由服务端按同一份列表判断算好下发；不涉及统计的模块留空即可。
+    stats: list[dict[str, Any]] | None = None
 
 
 class ActionResult(BaseModel):

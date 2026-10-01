@@ -19,9 +19,9 @@
     </div>
 
     <form class="filter-bar" @submit.prevent="reload">
-      <label v-for="field in filterFields" :key="field" class="filter-item">
-        <span>{{ field }}</span>
-        <input v-model="filters[field]" :placeholder="`按${field}检索`" />
+      <label v-for="field in filterFields" :key="field.key" class="filter-item">
+        <span>{{ field.label }}</span>
+        <input v-model="filters[field.key]" :placeholder="`按${field.label}检索`" />
       </label>
       <button class="btn" type="submit">查询</button>
       <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
@@ -68,18 +68,31 @@ import { onMounted, ref } from 'vue'
 import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type StatCard = { label: string; value: number }
 
 const ENDPOINT = '/api/vibration'
 const columns = ["监测编号", "监测部位", "所属机组", "振动速度", "报警阈值", "采集时间", "频谱特征", "监测状态"]
 const actions = ["开始采集", "登记振动超标", "发起复测"]
 const statuses = ["待采集", "数据正常", "振动超标", "已复测"]
-const stats = [{"label": "待采集记录", "value": 0}, {"label": "振动超标项数", "value": 0}, {"label": "本月复测数", "value": 0}]
+// 统计卡片不再写死：标签与口径都由服务端按采集列表算好下发。
+const stats = ref<StatCard[]>([
+  { label: "待采集记录", value: 0 },
+  { label: "振动超标项数", value: 0 },
+  { label: "本月复测数", value: 0 },
+])
+
+// 页面只负责把筛选条件交给服务端，结论（含监测状态、超标与否）一律以服务端台账为准，
+// 前端不再拿报警阈值自行判一遍，避免两个出口说法打架。
+const filterFields = [
+  { key: 'keyword', label: '监测编号' },
+  { key: 'part', label: '监测部位' },
+  { key: 'turbine', label: '所属机组' },
+] as const
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
 
 function resetFilters() {
   filters.value = {}
@@ -112,15 +125,24 @@ async function runAction(action: string, row: Row) {
 
 async function reload() {
   errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
+  const params = new URLSearchParams()
+  for (const field of filterFields) {
+    const value = filters.value[field.key]?.trim()
+    if (value) {
+      params.set(field.key, value)
+    }
+  }
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
+    const response = await request(`${ENDPOINT}?${params.toString()}`)
     if (!response.ok) {
       throw new Error('振动监测记录列表读取失败')
     }
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    if (Array.isArray(payload.stats) && payload.stats.length) {
+      stats.value = payload.stats as StatCard[]
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '振动监测列表读取失败'
   }
