@@ -15,6 +15,12 @@ class PageResult(BaseModel, Generic[T]):
     size: int = 20
 
 
+class VibrationPageResult(PageResult[dict]):
+    """振动监测列表结果：统计卡片随列表一起返回，页面与后端共用同一份结论。"""
+
+    stats: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ActionResult(BaseModel):
     ok: bool
     message: str

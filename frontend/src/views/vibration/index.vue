@@ -67,16 +67,28 @@ import { onMounted, ref } from 'vue'
 
 import { request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+type Row = Record<string, string | number | boolean | null>
+type StatCard = { label: string; value: number }
 
 const ENDPOINT = '/api/vibration'
 const columns = ["监测编号", "监测部位", "所属机组", "振动速度", "报警阈值", "采集时间", "频谱特征", "监测状态"]
 const actions = ["开始采集", "登记振动超标", "发起复测"]
-const statuses = ["待采集", "数据正常", "振动超标", "已复测"]
-const stats = [{"label": "待采集记录", "value": 0}, {"label": "振动超标项数", "value": 0}, {"label": "本月复测数", "value": 0}]
+// 监测状态、异常结论只认服务端台账，页面不再拿振动速度和报警阈值自行比较
+const DEFAULT_STATS: StatCard[] = [
+  { label: "待采集记录", value: 0 },
+  { label: "振动超标项数", value: 0 },
+  { label: "本月复测数", value: 0 },
+]
+// 页面筛选项与后端查询参数一一对应，避免另起一套过滤口径
+const FILTER_PARAMS: Record<string, string> = {
+  "监测编号": "keyword",
+  "监测部位": "part",
+  "所属机组": "turbine",
+}
 
 const rows = ref<Row[]>([])
 const total = ref(0)
+const stats = ref<StatCard[]>(DEFAULT_STATS)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
@@ -110,17 +122,43 @@ async function runAction(action: string, row: Row) {
   }
 }
 
+// 兜底统计：仅当后端未随列表下发卡片时，用当前采集列表的台账状态汇总，
+// 不做任何振动速度/报警阈值比较，结论仍与列表一致。
+function statsFromList(items: Row[]): StatCard[] {
+  const monthPrefix = new Date().toISOString().slice(0, 7)
+  return [
+    { label: DEFAULT_STATS[0].label, value: items.filter((row) => row.status === '待采集').length },
+    { label: DEFAULT_STATS[1].label, value: items.filter((row) => row.abnormal === true).length },
+    {
+      label: DEFAULT_STATS[2].label,
+      value: items.filter(
+        (row) => row.status === '已复测' && String(row['采集时间'] ?? '').startsWith(monthPrefix),
+      ).length,
+    },
+  ]
+}
+
 async function reload() {
   errorMessage.value = ''
-  const query = new URLSearchParams(filters.value as Record<string, string>).toString()
+  const params = new URLSearchParams()
+  for (const [field, value] of Object.entries(filters.value)) {
+    const trimmed = value.trim()
+    if (trimmed) {
+      params.set(FILTER_PARAMS[field] ?? field, trimmed)
+    }
+  }
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
+    const response = await request(`${ENDPOINT}?${params.toString()}`)
     if (!response.ok) {
       throw new Error('振动监测记录列表读取失败')
     }
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    // 统计数字直接用后端随列表给出的同一份结果，不再写死
+    stats.value = Array.isArray(payload.stats) && payload.stats.length
+      ? payload.stats
+      : statsFromList(rows.value)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '振动监测列表读取失败'
   }

@@ -1,11 +1,15 @@
-"""振动监测接口：维护振动监测记录，覆盖开始采集、登记振动超标、发起复测等动作。"""
+"""振动监测接口：维护振动监测记录，覆盖开始采集、登记振动超标、发起复测等动作。
+
+列表返回的监测状态、异常结论与统计卡片都来自 VibrationService 的同一份判断，
+页面不再自行比较振动速度与报警阈值。
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.schemas import ActionResult, EntryPayload, PageResult
+from app.schemas import ActionResult, EntryPayload, VibrationPageResult
 from app.services.vibration import VibrationService
 
 router = APIRouter(prefix="/api/vibration", tags=["振动监测"])
@@ -16,18 +20,35 @@ LIST_FIELDS = ["监测编号", "监测部位", "所属机组", "振动速度", "
 STATUSES = ["待采集", "数据正常", "振动超标", "已复测"]
 
 
-@router.get("", response_model=PageResult[dict])
+@router.get("", response_model=VibrationPageResult)
 def list_entries(
     keyword: str | None = Query(default=None, description="按监测编号检索"),
     status: str | None = Query(default=None, description="待采集、数据正常、振动超标、已复测"),
+    part: str | None = Query(default=None, description="按监测部位检索"),
+    turbine: str | None = Query(default=None, description="按所属机组检索"),
     page: int = 1,
     size: int = 20,
-) -> PageResult[dict]:
-    """按监测编号与状态过滤振动监测列表；没有数据时返回空页，不报错。"""
+) -> VibrationPageResult:
+    """按监测编号、监测部位、所属机组与状态过滤振动监测列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
-    return PageResult(items=items, total=total, page=page, size=size)
+    items, total = service.list_entries(
+        keyword=keyword, status=status, part=part, turbine=turbine, page=page, size=size
+    )
+    return VibrationPageResult(
+        items=items,
+        total=total,
+        page=page,
+        size=size,
+        stats=service.stat_cards(),
+    )
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出振动监测清单：返回全量台账，结论口径与列表、统计卡片一致。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "vibration", "total": total, "items": items, "stats": service.stat_cards()}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -52,14 +73,7 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     """对单条振动监测记录执行开始采集、登记振动超标、发起复测；不允许的动作会被拦下并说明原因。"""
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    entry, message = service.run_action(entry_id, action, payload.values)
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出振动监测清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "vibration", "total": total, "items": items}
